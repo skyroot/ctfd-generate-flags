@@ -14,7 +14,7 @@ class GenFlagChallenge(BaseChallenge):
         files = request.files.getlist('files[]')
 
         # Create challenge
-        chal = GenFlags(
+        chal = GenFlagCDBM(
             name=request.form['name'],
             value=request.form['value'],
             category=request.form['category'],
@@ -46,6 +46,86 @@ class GenFlagChallenge(BaseChallenge):
 
         db.session.commit()
 
+    @staticmethod
+    def read(challenge, team):
+        challenge = GenFlagCDBM.query.filter_by(id=challenge.id).first()
+        data = {
+            'id': challenge.id,
+            'name': challenge.name,
+            'value': challenge.value,
+            'description': challenge.description,
+            'category': challenge.category,
+            'hidden': challenge.hidden,
+            'max_attempts': challenge.max_attempts,
+            'type': challenge.type,
+            'type_data': {
+                'id': GenFlagCDBM.id,
+                'name': GenFlagCDBM.name,
+                'templates': GenFlagCDBM.templates,
+                'scripts': GenFlagCDBM.scripts,
+            }
+        }
+        return challenge, data
+
+    @staticmethod
+    def update(challenge, request):
+        challenge = GenFlagCDBM.query.filter_by(id=challenge.id).first()
+
+        challenge.name = request.form['name']
+        challenge.description = request.form['description']
+        challenge.value = int(request.form.get('value', 0)) if request.form.get('value', 0) else 0
+        challenge.max_attempts = int(request.form.get('max_attempts', 0)) if request.form.get('max_attempts', 0) else 0
+        challenge.category = request.form['category']
+        challenge.hidden = 'hidden' in request.form
+
+        db.session.commit()
+        db.session.close()
+
+    @staticmethod
+    def delete(challenge):
+        WrongKeys.query.filter_by(chalid=challenge.id).delete()
+        Solves.query.filter_by(chalid=challenge.id).delete()
+        Keys.query.filter_by(chal=challenge.id).delete()
+        files = Files.query.filter_by(chal=challenge.id).all()
+        for f in files:
+            utils.delete_file(f.id)
+        Files.query.filter_by(chal=challenge.id).delete()
+        Tags.query.filter_by(chal=challenge.id).delete()
+        Hints.query.filter_by(chal=challenge.id).delete()
+        GenFlagCDBM.query.filter_by(id=challenge.id).delete()
+        GenFlagsMap.query.filter_by(id=challenge.id).delete()
+        Challenges.query.filter_by(id=challenge.id).delete()
+        db.session.commit()
+
+    @staticmethod
+    def attempt(chal, request):
+        provided_key = request.form['key'].strip()
+        chal_keys = GenFlagsMap.query.filter_by(chal=team.id).all()
+        for chal_key in chal_keys:
+            if get_key_class(chal_key.type).compare(chal_key, provided_key):
+                return True, 'Correct'
+        return False, 'Incorrect'
+
+    @staticmethod
+    def solve(team, chal, request):
+        chal = GenFlagCDBM.query.filter_by(id=chal.id).first()
+        solve_count = Solves.query.join(Teams, Solves.teamid == Teams.id).filter(Solves.chalid==chal.id, Teams.banned==False).count()
+
+        provided_key = request.form['key'].strip()
+        solve = Solves(teamid=team.id, chalid=chal.id, ip=utils.get_ip(req=request), flag=provided_key)
+        db.session.add(solve)
+
+        db.session.commit()
+        db.session.close()
+
+    @staticmethod
+    def fail(team, chal, request):
+        provided_key = request.form['key'].strip()
+        wrong = WrongKeys(teamid=team.id, chalid=chal.id, ip=utils.get_ip(request), flag=provided_key)
+        db.session.add(wrong)
+        db.session.commit()
+        db.session.close()
+
 
 class GenFlagCDBM(challenges):
     __mapper_args__ = {'polymorphic_identity': 'genflags'}
@@ -61,15 +141,16 @@ class GenFlagCDBM(challenges):
         self.key = key
         self.generator = generator
 
-class GenFlags(db.model):
+class GenFlagsMap(db.model):
     id = db.Column(Integer, db.ForeignKey('challenges.id'))
     teamid = db.Column(None, db.ForeignKey('teams.id'), primary_key=True)
     description = db.Column(db.Text)
     flag = db.Column(db.Text)
 
-    def __init__(self, teamid, description, flag):
+    def __init__(self, teamid, description, type, flag):
         self.teamid = teamid
         self.flag = flag
+        self.type = type
         self.description = description
 
 def load(app):

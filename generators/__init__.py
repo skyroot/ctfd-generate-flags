@@ -7,7 +7,7 @@ class BaseGen(object):
         pass
 
 """
-Global dictionary used to hold all gnerators.
+Global dictionary used to hold all generators.
 Insert into this dictionary to register your generator
 """
 GENERATOR_CLASSES = {}
